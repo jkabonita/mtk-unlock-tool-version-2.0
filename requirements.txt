@@ -1,0 +1,10 @@
+wheel >= 0.37.1
+pyusb >= 1.2.1
+pycryptodome >= 3.15.0
+pycryptodomex
+colorama >= 0.4.4
+usb >= 0.0.83.dev0
+shiboken6 >= 6.4.0.1
+pyside6 >= 6.4.0.1
+mock >= 4.0.3
+pyserial >= 3.5
