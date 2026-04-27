@@ -11,6 +11,7 @@ release the buttons.
 
 ## Credits
 - kamakiri [xyzz]
+- jkabonita
 - linecode exploit [chimera]
 - Chaosmaster
 - Geert-Jan Kreileman (GUI, design & fixes)
