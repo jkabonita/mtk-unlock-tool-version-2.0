@@ -46,8 +46,8 @@ class Stage2(metaclass=LogBase):
     def preinit(self):
         try:
             hwcode = self.read32(0x8000000)
-        except:
-            print("Error reading hwcode...aborting.")
+        except Exception as e:
+            print(f"Error reading hwcode: {e}. Aborting.")
             return False
         self.config = Mtk_Config(self.loglevel)
         self.config.init_hwcode(hwcode)
@@ -136,7 +136,11 @@ class Stage2(metaclass=LogBase):
         wf = None
         buffer = bytearray()
         if filename is not None:
-            wf = open(filename, "wb")
+            try:
+                wf = open(filename, "wb")
+            except IOError as e:
+                self.error(f"Failed to open file {filename}: {e}")
+                return None
         sectors = (length // 0x200)
         sectors += (1 if length % 0x200 else 0)
         startsector = (start // 0x200)
@@ -181,7 +185,10 @@ class Stage2(metaclass=LogBase):
         if display:
             print_progress(100, 100, prefix='Complete: ', suffix=filename, bar_length=50)
         if wf is not None:
-            wf.close()
+            try:
+                wf.close()
+            except Exception as e:
+                self.error(f"Error closing file: {e}")
         else:
             return buffer[start % 0x200:(start % 0x200) + length]
 
@@ -195,7 +202,7 @@ class Stage2(metaclass=LogBase):
         if self.cdc.connected:
             if sectors == 0:
                 buffer = self.readflash(type=1, start=0, length=0x4000, display=False)
-                if len(buffer) != 0x4000:
+                if buffer is None or len(buffer) != 0x4000:
                     print("Error on reading boot1 area.")
                     return
                 if buffer[:9] == b'EMMC_BOOT':
@@ -211,12 +218,20 @@ class Stage2(metaclass=LogBase):
                             idx = data.find(b"MTK_BLOADER_INFO")
                             if idx != -1:
                                 filename = data[idx + 0x1B:idx + 0x3D].rstrip(b"\x00").decode('utf-8')
-                            with open(os.path.join("logs", filename), "wb") as wf:
-                                wf.write(data[start:start + length])
-                                print("Done writing to " + os.path.join("logs", filename))
-                            with open(os.path.join("logs", "hdr_" + filename), "wb") as wf:
-                                wf.write(data[:start])
-                                print("Done writing to " + os.path.join("logs", "hdr_" + filename))
+                            try:
+                                with open(os.path.join("logs", filename), "wb") as wf:
+                                    wf.write(data[start:start + length])
+                                    print("Done writing to " + os.path.join("logs", filename))
+                            except IOError as e:
+                                print(f"Error writing file: {e}")
+                                return
+                            try:
+                                with open(os.path.join("logs", "hdr_" + filename), "wb") as wf:
+                                    wf.write(data[:start])
+                                    print("Done writing to " + os.path.join("logs", "hdr_" + filename))
+                            except IOError as e:
+                                print(f"Error writing header file: {e}")
+                                return
 
                             return
                 else:
@@ -248,8 +263,13 @@ class Stage2(metaclass=LogBase):
         addr = start
         data = b""
         pos = 0
+        wf = None
         if filename is not None:
-            wf = open(filename, "wb")
+            try:
+                wf = open(filename, "wb")
+            except IOError as e:
+                self.error(f"Failed to open file {filename}: {e}")
+                return None
         while bytestoread > 0:
             size = min(bytestoread, 0x100)
             self.usbwrite(pack(">I", 0xf00dd00d))
@@ -262,18 +282,31 @@ class Stage2(metaclass=LogBase):
                 wf.write(self.usbread(size))
             bytestoread -= size
             pos += size
-        self.info(f"{hex(start)}: " + hexlify(data).decode('utf-8'))
-        if filename is not None:
-            wf.close()
+        if filename is None:
+            self.info(f"{hex(start)}: " + hexlify(data).decode('utf-8'))
+        if wf is not None:
+            try:
+                wf.close()
+            except Exception as e:
+                self.error(f"Error closing file: {e}")
         return data
 
     def memwrite(self, start, data, filename=None):
+        rf = None
         if filename is not None:
-            rf = open(filename, "rb")
-            bytestowrite = os.stat(filename).st_size
+            try:
+                rf = open(filename, "rb")
+                bytestowrite = os.stat(filename).st_size
+            except (IOError, OSError) as e:
+                self.error(f"Failed to open file {filename}: {e}")
+                return False
         else:
             if isinstance(data, str):
-                data = bytes.fromhex(data)
+                try:
+                    data = bytes.fromhex(data)
+                except ValueError as e:
+                    self.error(f"Invalid hex string: {e}")
+                    return False
             elif isinstance(data, int):
                 data = pack("<I", data)
             bytestowrite = len(data)
@@ -295,8 +328,11 @@ class Stage2(metaclass=LogBase):
                 wdata += b"\x00"
             self.usbwrite(wdata)
 
-        if filename is not None:
-            rf.close()
+        if rf is not None:
+            try:
+                rf.close()
+            except Exception as e:
+                self.error(f"Error closing file: {e}")
         ack = self.usbread(4)
         if ack == b"\xD0\xD0\xD0\xD0":
             return True
@@ -328,7 +364,13 @@ class Stage2(metaclass=LogBase):
         bytesread = 0
         old = 0
         bytestoread = sectors * 0x100
-        with open(filename, "wb") as wf:
+        try:
+            wf = open(filename, "wb")
+        except IOError as e:
+            self.error(f"Failed to open file {filename}: {e}")
+            return
+        
+        try:
             for sector in range(start, sectors):
                 self.usbwrite(pack(">I", 0xf00dd00d))
                 self.usbwrite(pack(">I", 0x2000))
@@ -350,6 +392,11 @@ class Stage2(metaclass=LogBase):
                 wf.write(tmp[:size])
                 bytestoread -= size
             print_progress(100, 100, prefix='Complete: ', suffix=filename, bar_length=50)
+        finally:
+            try:
+                wf.close()
+            except Exception as e:
+                self.error(f"Error closing file: {e}")
         print("Done")
 
     def keys(self, data=b"", otp=None, mode="dxcc"):
@@ -483,16 +530,14 @@ class Stage2(metaclass=LogBase):
 
 
 def getint(valuestr):
-    if valuestr == '':
+    if valuestr == '' or valuestr is None:
         return None
     try:
         return int(valuestr)
-    except Exception as err:
-        err = err
+    except ValueError:
         try:
             return int(valuestr, 16)
-        except Exception as err:
-            err = err
+        except ValueError:
             pass
     return 0
 
@@ -526,29 +571,29 @@ def main():
     subparsers = parser.add_subparsers(dest="cmd", help='Valid commands are: rpmb, preloader, boot2, memread, memwrite, keys')
 
     parser_rpmb = subparsers.add_parser("rpmb", help="Dump the rpmb")
-    parser_rpmb.add_argument('--start', dest='start', type=str,
+    parser_rpmb.add_argument('--start', dest='start', type=str, default='0',
                         help='Start offset to dump')
-    parser_rpmb.add_argument('--length', dest='length', type=str,
+    parser_rpmb.add_argument('--length', dest='length', type=str, default='0',
                         help='Max length to dump')
     parser_rpmb.add_argument('--reverse', dest='reverse', action="store_true",
                         help='Reverse byte order (example: rpmb command)')
-    parser_rpmb.add_argument('--filename', dest='filename', type=str,
+    parser_rpmb.add_argument('--filename', dest='filename', type=str, default=None,
                         help='Read from / save to filename')
 
     parser_preloader = subparsers.add_parser("preloader", help="Dump the preloader")
-    parser_preloader.add_argument('--start', dest='start', type=str,
+    parser_preloader.add_argument('--start', dest='start', type=str, default='0',
                         help='Start offset to dump')
-    parser_preloader.add_argument('--length', dest='length', type=str,
+    parser_preloader.add_argument('--length', dest='length', type=str, default='0',
                         help='Max length to dump')
-    parser_preloader.add_argument('--filename', dest='filename', type=str,
+    parser_preloader.add_argument('--filename', dest='filename', type=str, default=None,
                         help='Read from / save to filename')
 
     parser_boot2 = subparsers.add_parser("boot2", help="Dump boot2")
-    parser_boot2.add_argument('--start', dest='start', type=str,
+    parser_boot2.add_argument('--start', dest='start', type=str, default='0',
                         help='Start offset to dump')
-    parser_boot2.add_argument('--length', dest='length', type=str,
+    parser_boot2.add_argument('--length', dest='length', type=str, default='0',
                         help='Max length to dump')
-    parser_boot2.add_argument('--filename', dest='filename', type=str,
+    parser_boot2.add_argument('--filename', dest='filename', type=str, default=None,
                         help='Read from / save to filename')
 
     parser_memread = subparsers.add_parser("memread", help="Read memory")
@@ -556,7 +601,7 @@ def main():
                         help='Start offset to dump')
     parser_memread.add_argument(dest='length', type=str,
                         help='Max length to dump')
-    parser_memread.add_argument('--filename', dest='filename', type=str,
+    parser_memread.add_argument('--filename', dest='filename', type=str, default=None,
                         help='Save to filename')
 
     parser_memwrite = subparsers.add_parser("memwrite", help="Write memory")
@@ -574,7 +619,7 @@ def main():
                         help='Option for generating: sw or hw')
 
     parser_keys = subparsers.add_parser("keys", help="Write memory")
-    parser_keys.add_argument('--otp', dest='otp', type=str,
+    parser_keys.add_argument('--otp', dest='otp', type=str, default=None,
                         help='OTP for keys (dxcc,sej,gcpu)')
     parser_keys.add_argument('--mode', dest='mode', default=None, type=str,
                         help='keymode (dxcc,sej,gcpu,sej_aes_decrypt,sej_aes_decrypt,sej_sst_decrypt,sej_sst_encrypt')
@@ -584,14 +629,23 @@ def main():
     cmd = args.cmd
     if cmd not in cmds:
         showcommands()
-        exit(0)
+        sys.exit(0)
 
     if not os.path.exists("logs"):
-        os.mkdir("logs")
+        try:
+            os.mkdir("logs")
+        except OSError as e:
+            print(f"Failed to create logs directory: {e}")
+            sys.exit(1)
+    
     st2 = Stage2(args)
-    if st2.connect():
+    if not st2.connect():
+        print("Failed to connect to device")
+        sys.exit(1)
+    
+    try:
         if not st2.preinit():
-            exit(1)
+            sys.exit(1)
 
         if cmd == "rpmb":
             if args.filename is None:
@@ -689,22 +743,28 @@ def main():
             elif args.flag=="lock":
                 lock_state = 1
                 critical_lock_state = 0
-            with open("seccfg.bin", "wb") as wf:
-                seccfg_ver = 4
-                seccfg_size = 0x3C                
-                sboot_runtime = 0
-                seccfg_data = pack("<IIIIIII", 0x4D4D4D4D, seccfg_ver, seccfg_size, lock_state,
-                                   critical_lock_state, sboot_runtime, 0x45454545)
-                dec_hash = hashlib.sha256(seccfg_data).digest()
-                if args.sw:
-                    enc_hash = st2.hwcrypto.sej.sej_sec_cfg_sw(dec_hash, True)
-                else:
-                    enc_hash = st2.hwcrypto.sej.sej_sec_cfg_hw(dec_hash,True)
-                data = seccfg_data + enc_hash
-                data += b"\x00" * (0x200 - len(data))
-                wf.write(data)
-                print("Successfully wrote seccfg to seccfg.bin. You need to write seccfg.bin to partition seccfg.")
-    st2.close()
+            
+            try:
+                with open("seccfg.bin", "wb") as wf:
+                    seccfg_ver = 4
+                    seccfg_size = 0x3C                
+                    sboot_runtime = 0
+                    seccfg_data = pack("<IIIIIII", 0x4D4D4D4D, seccfg_ver, seccfg_size, lock_state,
+                                       critical_lock_state, sboot_runtime, 0x45454545)
+                    dec_hash = hashlib.sha256(seccfg_data).digest()
+                    if args.sw:
+                        enc_hash = st2.hwcrypto.sej.sej_sec_cfg_sw(dec_hash, True)
+                    else:
+                        enc_hash = st2.hwcrypto.sej.sej_sec_cfg_hw(dec_hash,True)
+                    data = seccfg_data + enc_hash
+                    data += b"\x00" * (0x200 - len(data))
+                    wf.write(data)
+                    print("Successfully wrote seccfg to seccfg.bin. You need to write seccfg.bin to partition seccfg.")
+            except IOError as e:
+                print(f"Error writing seccfg.bin: {e}")
+                sys.exit(1)
+    finally:
+        st2.close()
 
 if __name__ == "__main__":
     main()

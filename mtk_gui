@@ -79,8 +79,9 @@ def getDevInfo(self, parameters):
             mtkClass.preloader.init()
         else:
             phoneInfo['cdcInit'] = True
-    except:
+    except Exception as e:
         phoneInfo['cantConnect'] = True
+        print(f"Connection error: {e}")
     phoneInfo['chipset'] = str(mtkClass.config.chipconfig.name) + \
                            " (" + str(mtkClass.config.chipconfig.description) + ")"
     self.sendUpdateSignal.emit()
@@ -152,12 +153,18 @@ class MainWindow(QMainWindow):
     @Slot()
     def updateState(self):
         global lock
-        lock.acquire()
-        doneBytes = 0
-        if "currentPartitionSizeDone" in self.Status:
-            curpartBytes = self.Status["currentPartitionSizeDone"]
-        else:
-            curpartBytes = self.Status["currentPartitionSize"]
+        if not lock.acquire(timeout=1.0):
+            # Skip update if lock cannot be acquired quickly
+            return
+        
+        try:
+            doneBytes = 0
+            if "currentPartitionSizeDone" in self.Status:
+                curpartBytes = self.Status["currentPartitionSizeDone"]
+            elif "currentPartitionSize" in self.Status:
+                curpartBytes = self.Status["currentPartitionSize"]
+            else:
+                return  # No data to update
 
         if "allPartitions" in self.Status:
             for partition in self.Status["allPartitions"]:
@@ -192,8 +199,10 @@ class MainWindow(QMainWindow):
                 timeinfo + QCoreApplication.translate("main"," left")+"</td></tr></table>"
             self.ui.partProgressText.setText(txt)
 
-
-        lock.release()
+        except Exception as e:
+            print(f"Error updating state: {e}")
+        finally:
+            lock.release()
 
     def updateStateAsync(self, toolkit, parameters):
         while not self.Status["done"]:
@@ -220,14 +229,19 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def updateProgress(self, progress):
         try:
-            if self.Status["rpmb"]:
+            if self.Status.get("rpmb", False):
                 self.Status["currentPartitionSizeDone"] = progress
             else:
-                self.Status["currentPartitionSizeDone"] = progress * self.devhandler.da_handler.mtk.daloader.progress.pagesize
+                if (self.devhandler and self.devhandler.da_handler and 
+                    self.devhandler.da_handler.mtk and self.devhandler.da_handler.mtk.daloader and
+                    self.devhandler.da_handler.mtk.daloader.progress):
+                    self.Status["currentPartitionSizeDone"] = progress * self.devhandler.da_handler.mtk.daloader.progress.pagesize
+                else:
+                    self.Status["currentPartitionSizeDone"] = progress
 
             self.updateState()
-        except:
-            pass
+        except Exception as e:
+            print(f"Progress update error: {e}")
 
     def setdevhandler(self, devhandler):
         self.devhandler = devhandler
@@ -407,7 +421,7 @@ class MainWindow(QMainWindow):
 
     def selectWriteFile(self, partition, checkbox, lineedit):
         fname=self.fdialog.open(partition+".bin")
-        if fname is None:
+        if fname is None or fname == "":
             checkbox.setChecked(False)
             lineedit.setText("")
             lineedit.setDisabled(True)
